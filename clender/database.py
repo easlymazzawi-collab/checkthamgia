@@ -270,6 +270,15 @@ class ClenderDB:
                 rows = await cur.fetchall()
                 return [dict(r) for r in rows]
 
+    async def list_all_pending(self) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT user_id, target_channel_id FROM pending_requests"
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
+
     async def stats_summary(self) -> dict:
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT COUNT(*) FROM users") as cur:

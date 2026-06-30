@@ -42,24 +42,17 @@ async def main() -> None:
     me = await bot.get_me()
     await db.set_setting("bot_username", me.username or "")
 
-    async def notify_admins(text: str) -> None:
-        for admin_id in config.ADMIN_IDS:
-            try:
-                await bot.send_message(admin_id, text, parse_mode="Markdown")
-            except Exception as e:
-                logger.warning("Notify admin %s: %s", admin_id, e)
-
     userbot: UserbotService | None = None
     if config.API_ID and config.API_HASH:
-        userbot = UserbotService(db, bot_username=me.username or "", notify=notify_admins)
+        userbot = UserbotService(db, bot_username=me.username or "")
         try:
             await userbot.start()
-            logger.info("Userbot connected")
+            logger.info("Userbot connected (add-bot only)")
         except Exception as e:
-            logger.warning("Userbot failed to start (bot-only mode): %s", e)
+            logger.warning("Userbot failed to start: %s", e)
             userbot = None
     else:
-        logger.warning("API_ID/API_HASH not set — running bot-only mode")
+        logger.warning("API_ID/API_HASH not set — chỉ chạy bot, không add bot qua folder")
 
     dp = create_dispatcher(db, userbot)
 
@@ -82,7 +75,10 @@ async def main() -> None:
     logger.info("Backup scheduler: every %s hours", hours)
 
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message", "callback_query", "chat_join_request", "chat_member"],
+        )
     finally:
         scheduler.shutdown(wait=False)
         await bot.session.close()

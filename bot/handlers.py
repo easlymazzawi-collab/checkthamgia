@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Message
 import config
 from bot.broadcast_state import clear_session, get_session
 from bot.keyboards import admin_menu, broadcast_menu, config_menu, confirm_broadcast
+from bot.approval import scan_and_approve, setup_approval_handlers
 from clender.database import ClenderDB
 from services.backup import send_backup_to_admins
 
@@ -48,7 +49,8 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         await message.answer(
             "👋 Check Tham Gia Bot\n\n"
             "• Member muốn vào kênh đích → phải vào kênh chỉ định trước\n"
-            "• Userbot tự duyệt join request khi phát hiện vào kênh gate\n"
+            "• Bot tự duyệt join request khi phát hiện vào kênh gate\n"
+            "• Userbot chỉ dùng để add bot vào kênh qua folder\n"
             "• Broadcast bằng copy message\n"
             "• Backup tự động theo giờ cấu hình",
             reply_markup=admin_menu(),
@@ -103,33 +105,19 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
     @router.message(ConfigStates.waiting_gate)
     async def set_gate(message: Message, state: FSMContext) -> None:
         text = message.text.strip()
-        chat_id = None
-        title = text
-        if userbot_service and userbot_service.client:
-            try:
-                ent = await userbot_service.client.get_entity(text)
-                chat_id = ent.id
-                if hasattr(ent, "title"):
-                    title = ent.title
-                # normalize supergroup id
-                from telethon.tl.types import Channel
+        try:
+            if text.lstrip("-").isdigit():
+                chat = await message.bot.get_chat(int(text))
+            else:
+                chat = await message.bot.get_chat(text)
+        except Exception as e:
+            await message.answer(f"❌ Không lấy được kênh (bot phải là admin): {e}")
+            return
 
-                if isinstance(ent, Channel):
-                    chat_id = int(f"-100{ent.id}")
-            except Exception as e:
-                await message.answer(f"❌ Không lấy được kênh: {e}")
-                return
-        else:
-            try:
-                chat_id = int(text)
-            except ValueError:
-                await message.answer("❌ Cần userbot online hoặc gửi numeric chat_id")
-                return
-
-        await db.set_gate_channel_id(chat_id)
-        await db.add_channel(chat_id, title, "gate")
+        await db.set_gate_channel_id(chat.id)
+        await db.add_channel(chat.id, chat.title or text, "gate")
         await state.clear()
-        await message.answer(f"✅ Kênh chỉ định: {title} (`{chat_id}`)", parse_mode="Markdown")
+        await message.answer(f"✅ Kênh chỉ định: {chat.title} (`{chat.id}`)", parse_mode="Markdown")
 
     @router.callback_query(F.data == "cfg_target_add")
     async def cfg_target(cb: CallbackQuery, state: FSMContext) -> None:
@@ -140,26 +128,18 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
     @router.message(ConfigStates.waiting_target)
     async def set_target(message: Message, state: FSMContext) -> None:
         text = message.text.strip()
-        if userbot_service and userbot_service.client:
-            try:
-                ent = await userbot_service.client.get_entity(text)
-                from telethon.tl.types import Channel
+        try:
+            if text.lstrip("-").isdigit():
+                chat = await message.bot.get_chat(int(text))
+            else:
+                chat = await message.bot.get_chat(text)
+        except Exception as e:
+            await message.answer(f"❌ Không lấy được kênh (bot phải là admin): {e}")
+            return
 
-                chat_id = int(f"-100{ent.id}") if isinstance(ent, Channel) else ent.id
-                title = getattr(ent, "title", text)
-                await db.add_channel(chat_id, title, "target")
-                await state.clear()
-                await message.answer(f"✅ Thêm kênh đích: {title} (`{chat_id}`)", parse_mode="Markdown")
-            except Exception as e:
-                await message.answer(f"❌ {e}")
-        else:
-            try:
-                chat_id = int(text)
-                await db.add_channel(chat_id, text, "target")
-                await state.clear()
-                await message.answer(f"✅ Thêm kênh đích `{chat_id}`", parse_mode="Markdown")
-            except ValueError:
-                await message.answer("❌ Cần userbot hoặc numeric id")
+        await db.add_channel(chat.id, chat.title or text, "target")
+        await state.clear()
+        await message.answer(f"✅ Thêm kênh đích: {chat.title} (`{chat.id}`)", parse_mode="Markdown")
 
     @router.callback_query(F.data == "cfg_list")
     async def cfg_list(cb: CallbackQuery) -> None:
@@ -219,10 +199,7 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
     async def scan_approve(message: Message) -> None:
         if not is_admin(message.from_user.id):
             return
-        if not userbot_service:
-            await message.answer("❌ Userbot chưa chạy")
-            return
-        result = await userbot_service.scan_pending_and_approve()
+        result = await scan_and_approve(message.bot, db)
         await message.answer(result)
 
     @router.message(F.text == "💾 Backup ngay")
@@ -326,5 +303,6 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
 def create_dispatcher(db: ClenderDB, userbot_service=None) -> Dispatcher:
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
+    setup_approval_handlers(dp, db)
     setup_handlers(dp, db, userbot_service)
     return dp

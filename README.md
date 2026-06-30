@@ -7,8 +7,8 @@ Tool kiểm tra & tự duyệt tham gia kênh Telegram — Bot + Userbot + kho d
 | Tính năng | Mô tả |
 |-----------|--------|
 | **Kênh chỉ định (gate)** | Member muốn vào kênh đích phải vào kênh gate trước |
-| **Tự duyệt** | Userbot phát hiện member vào gate → tự approve join request, không cần bấm nút |
-| **Mời bot qua folder** | Userbot quét folder Telegram, mời bot vào các kênh |
+| **Tự duyệt (Bot)** | Bot là admin kênh đích → tự `approve_chat_join_request` khi member vào kênh gate |
+| **Userbot** | Chỉ dùng mời bot vào kênh qua folder Telegram, không duyệt |
 | **Cập nhật dữ liệu** | Lưu user/events vào SQLite (`clender.db`), thông báo admin qua bot |
 | **Broadcast** | Copy message, gửi nhiều bài, bấm Done → chờ 1s → xác nhận → gửi |
 | **Thống kê** | Số người vào gate, đã duyệt, log ai vào khi nào |
@@ -36,8 +36,9 @@ Nhập số điện thoại và mã OTP khi được hỏi. Session lưu tại `
 
 1. `/start` — menu admin
 2. **Cấu hình** → Set kênh chỉ định (gate) và kênh đích (bật join request)
-3. **Mời bot (folder)** → nhập tên folder Telegram để userbot mời bot vào kênh
-4. Userbot account phải là admin kênh đích (quyền duyệt thành viên)
+3. **Mời bot (folder)** → userbot add bot vào kênh (bot cần quyền admin sau đó)
+4. **Bot** phải là admin kênh gate & đích, có quyền **Invite users via link** / duyệt join request
+5. Userbot account chỉ cần quyền add member vào kênh (để mời bot)
 
 ## Luồng tự duyệt
 
@@ -46,9 +47,9 @@ Member gửi join request kênh đích
         ↓
 Member vào kênh gate (chỉ định)
         ↓
-Userbot phát hiện → HideChatJoinRequest (approve)
+Bot phát hiện (chat_member) → approve_chat_join_request
         ↓
-Cập nhật clender DB + thông báo admin bot
+Cập nhật clender DB + thông báo admin
 ```
 
 ## Broadcast
@@ -72,20 +73,21 @@ checkthamgia/
 ├── config.py
 ├── clender/
 │   └── database.py      # Kho dữ liệu SQLite
-├── userbot/
-│   └── service.py       # Folder invite, auto-approve
 ├── bot/
 │   ├── handlers.py      # UI admin, broadcast, stats
+│   ├── approval.py      # Bot tự duyệt join request
 │   ├── keyboards.py
 │   └── broadcast_state.py
+└── userbot/
+    └── service.py       # Chỉ mời bot qua folder
 └── services/
     └── backup.py
 ```
 
 ## Yêu cầu quyền
 
-- **Userbot**: admin kênh gate & đích, quyền `invite_users` + duyệt join request
-- **Bot**: admin kênh (nếu cần), dùng cho UI và broadcast PM
+- **Bot**: admin kênh gate & đích, quyền duyệt join request + nhận `chat_join_request` / `chat_member`
+- **Userbot**: chỉ add bot vào kênh qua folder (quyền invite/add member)
 
 ## Biến môi trường
 
