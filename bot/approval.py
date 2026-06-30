@@ -174,7 +174,10 @@ def setup_approval_handlers(dp_router: Router, db: ClenderDB) -> None:
         if await _user_in_gate(bot, gate_id, user.id):
             await _approve_user(bot, db, user.id, event.chat.id, user.username or "")
         else:
-            await msg_need_gate(bot, db, user.id, target_title, gate_id)
+            await msg_need_gate(
+                bot, db, user.id, target_title, gate_id,
+                user.username or "", user.first_name or "",
+            )
 
     @router.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
     async def on_gate_join(event: ChatMemberUpdated, bot: Bot) -> None:
