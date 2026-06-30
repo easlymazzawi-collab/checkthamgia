@@ -322,14 +322,13 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         need = await db.get_setting("member_msg_need_gate", "")
         approved = await db.get_setting("member_msg_approved", "")
         await cb.message.answer(
-            "✏️ **Tin nhắn gửi member**\n\n"
-            "Bot admin nhắn DM (join request) + đăng trong kênh gate.\n\n"
+            "✏️ **Tin nhắn gửi member (DM trực tiếp)**\n\n"
             "Gửi theo format (3–4 phần, phân cách `---`):\n"
-            "`NEED_GATE` — chưa vào gate (DM)\n"
-            "`APPROVED` — đã duyệt (DM)\n"
+            "`NEED_GATE` — chưa vào gate\n"
+            "`APPROVED` — đã duyệt\n"
             "`GATE_WAIT` — vào gate, chờ request\n"
             "`GATE_OK` — (tuỳ chọn) vào gate + đã duyệt\n\n"
-            "Biến: `{target}` `{gate}` `{count}` `{name}` `{mention}` `{extra}`\n\n"
+            "Biến: `{target}` `{gate}` `{count}` `{name}`\n\n"
             "Gửi `reset` để dùng mặc định.\n"
             "Gửi `xem` để xem tin hiện tại.",
             parse_mode="Markdown",
@@ -341,7 +340,6 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         if text.lower() == "xem":
             from bot.member_notify import (
                 DEFAULT_APPROVED,
-                DEFAULT_GATE_CHANNEL,
                 DEFAULT_GATE_OK,
                 DEFAULT_GATE_WAIT,
                 DEFAULT_NEED_GATE,
@@ -356,8 +354,6 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
                 + await db.get_setting("member_msg_gate_wait", DEFAULT_GATE_WAIT)
                 + "\n\nGATE_OK:\n"
                 + await db.get_setting("member_msg_gate_ok", DEFAULT_GATE_OK)
-                + "\n\nGATE_CHANNEL (HTML, {mention}):\n"
-                + await db.get_setting("member_msg_gate_channel", DEFAULT_GATE_CHANNEL)
             )
             return
         if text.lower() == "reset":
@@ -366,7 +362,6 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
                 "member_msg_approved",
                 "member_msg_gate_wait",
                 "member_msg_gate_ok",
-                "member_msg_gate_channel",
             ):
                 await db.set_setting(k, "")
             await state.clear()
