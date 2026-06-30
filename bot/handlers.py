@@ -14,6 +14,7 @@ from aiogram.types import CallbackQuery, Message
 import config
 from bot.broadcast_state import clear_session, get_session
 from bot.keyboards import admin_menu, broadcast_menu, config_menu, confirm_broadcast
+from bot.formatting import answer_md, answer_text, md_escape
 from bot.approval import scan_and_approve, setup_approval_handlers
 from clender.database import ClenderDB
 from services.backup import send_backup_to_admins
@@ -84,7 +85,7 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         userbot_service.bot_username = me.username or ""
 
         result = await userbot_service.add_from_addlist(addlist_url, gate_chat.id)
-        await message.answer(result[:4000], parse_mode="Markdown")
+        await answer_text(message, result)
 
     @router.message(Command("all"))
     async def cmd_all(message: Message) -> None:
@@ -113,7 +114,7 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         userbot_service.bot_username = me.username or ""
 
         result = await userbot_service.invite_bot_to_all_managed()
-        await message.answer(result[:4000], parse_mode="Markdown")
+        await answer_text(message, result)
 
     @router.message(CommandStart())
     async def cmd_start(message: Message) -> None:
@@ -122,7 +123,8 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
         await message.answer(
             "👋 Check Tham Gia Bot\n\n"
-            "• `/add` link addlist + @gate — thêm folder nhanh 1 lệnh\n"
+            "• `/add` link addlist + @gate — thêm folder nhanh\n"
+            "• `/all` — mời bot vào **tất cả** folder đang quản lý\n"
             "• Mỗi **folder** có 1 kênh gate riêng — member phải vào gate mới duyệt\n"
             "• Bot tự duyệt join request khi vào đúng gate của folder\n"
             "• Userbot chỉ dùng để add bot vào kênh qua folder\n"
@@ -383,7 +385,7 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         userbot_service.bot_username = me.username or ""
         result = await userbot_service.invite_bot_to_folder(folder, gate_id)
         await state.clear()
-        await message.answer(result[:4000], parse_mode="Markdown")
+        await answer_text(message, result)
 
     @router.message(F.text == "🔍 Quét duyệt")
     async def scan_approve(message: Message) -> None:

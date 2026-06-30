@@ -103,8 +103,8 @@ class UserbotService:
         await self.db.apply_folder_gate_to_targets(folder_name)
 
         header = (
-            f"📂 **{folder_name}**\n"
-            f"🔑 Gate: `{gate_id}`\n"
+            f"📂 {folder_name}\n"
+            f"🔑 Gate: {gate_id}\n"
             f"📁 {ok} kênh đích | bỏ qua gate {skipped} | lỗi {fail}\n"
         )
         return header + "\n".join(gate_lines + lines[:30])
@@ -177,7 +177,7 @@ class UserbotService:
             return "❌ Chưa có folder nào.\nDùng `/add` hoặc **Mời bot (folder)** trước."
 
         bot = await self._ensure_bot()
-        lines: list[str] = ["🚀 **Mời bot vào tất cả folder đang quản lý**\n"]
+        lines: list[str] = ["🚀 Mời bot vào tất cả folder đang quản lý\n"]
         total_ok, total_fail = 0, 0
 
         for folder in folders:
@@ -214,10 +214,10 @@ class UserbotService:
             total_fail += f_fail
             gate_title = folder.get("gate_title") or gate_id
             lines.append(
-                f"📂 **{folder_name}** (gate: {gate_title})\n"
+                f"📂 {folder_name} (gate: {gate_title})\n"
                 f"   ✅ {f_ok} | ❌ {f_fail} kênh"
             )
             lines.extend(f_errors[:5])
 
-        lines.append(f"\n**Tổng:** ✅ {total_ok} | ❌ {total_fail}")
+        lines.append(f"\nTổng: ✅ {total_ok} | ❌ {total_fail}")
         return "\n".join(lines)

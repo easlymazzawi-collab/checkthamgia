@@ -57,7 +57,7 @@ async def _approve_user(
 async def _notify_admins(bot: Bot, text: str) -> None:
     for admin_id in config.ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, text, parse_mode="Markdown")
+            await bot.send_message(admin_id, text, parse_mode=None)
         except Exception as e:
             logger.warning("Notify admin %s: %s", admin_id, e)
 
