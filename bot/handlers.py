@@ -44,6 +44,48 @@ def is_admin(user_id: int) -> bool:
 def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
     dp.include_router(router)
 
+    @router.message(Command("add", "addd"))
+    async def cmd_add(message: Message) -> None:
+        """Thêm nhanh: /add https://t.me/addlist/XXX @kenhmember"""
+        if not is_admin(message.from_user.id):
+            return
+        if not userbot_service:
+            await message.answer("❌ Userbot chưa chạy — cần API_ID/API_HASH trong .env")
+            return
+
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 3:
+            await message.answer(
+                "📎 **Thêm folder nhanh**\n\n"
+                "Cú pháp:\n"
+                "`/add https://t.me/addlist/XXX @kenhmember`\n\n"
+                "• Link addlist — copy từ Telegram\n"
+                "• @kenhmember — kênh gate, member **phải vào** trước khi duyệt\n\n"
+                "VD:\n"
+                "`/add https://t.me/addlist/QYZFGBD8dRoxZWU1 @kenhmember`",
+                parse_mode="Markdown",
+            )
+            return
+
+        addlist_url = parts[1].strip()
+        gate_ref = parts[2].strip()
+
+        try:
+            gate_chat = await message.bot.get_chat(
+                int(gate_ref) if gate_ref.lstrip("-").isdigit() else gate_ref
+            )
+        except Exception as e:
+            await message.answer(f"❌ Không lấy được kênh gate (bot phải là admin): {e}")
+            return
+
+        await message.answer("⏳ Đang quét addlist + add bot vào kênh...")
+        me = await message.bot.get_me()
+        await db.set_setting("bot_username", me.username or "")
+        userbot_service.bot_username = me.username or ""
+
+        result = await userbot_service.add_from_addlist(addlist_url, gate_chat.id)
+        await message.answer(result[:4000], parse_mode="Markdown")
+
     @router.message(CommandStart())
     async def cmd_start(message: Message) -> None:
         if not is_admin(message.from_user.id):
@@ -51,6 +93,7 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
         await message.answer(
             "👋 Check Tham Gia Bot\n\n"
+            "• `/add` link addlist + @gate — thêm folder nhanh 1 lệnh\n"
             "• Mỗi **folder** có 1 kênh gate riêng — member phải vào gate mới duyệt\n"
             "• Bot tự duyệt join request khi vào đúng gate của folder\n"
             "• Userbot chỉ dùng để add bot vào kênh qua folder\n"
