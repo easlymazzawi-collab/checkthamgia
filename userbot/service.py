@@ -168,3 +168,56 @@ class UserbotService:
             return f"❌ Không tìm thấy folder `{folder_name}` hoặc folder trống"
 
         return await self._invite_channels(channels, gate_id, resolved_folder)
+
+    async def invite_bot_to_all_managed(self) -> str:
+        """Mời bot vào tất cả kênh (gate + đích) của mọi folder đang quản lý trong DB."""
+        assert self.client
+        folders = await self.db.list_folders()
+        if not folders:
+            return "❌ Chưa có folder nào.\nDùng `/add` hoặc **Mời bot (folder)** trước."
+
+        bot = await self._ensure_bot()
+        lines: list[str] = ["🚀 **Mời bot vào tất cả folder đang quản lý**\n"]
+        total_ok, total_fail = 0, 0
+
+        for folder in folders:
+            folder_name = folder["folder_name"]
+            gate_id = folder["gate_channel_id"]
+            targets = await self.db.list_targets_by_folder(folder_name)
+
+            chat_ids: list[int] = []
+            seen: set[int] = set()
+
+            def add_id(cid: int) -> None:
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    chat_ids.append(cid)
+
+            add_id(gate_id)
+            for t in targets:
+                add_id(t["chat_id"])
+
+            f_ok, f_fail = 0, 0
+            f_errors: list[str] = []
+            for chat_id in chat_ids:
+                try:
+                    ent = await self.client.get_entity(chat_id)
+                    await self.client(InviteToChannelRequest(ent, [bot]))
+                    f_ok += 1
+                except Exception as e:
+                    f_fail += 1
+                    ch = await self.db.get_channel(chat_id)
+                    name = (ch or {}).get("title", chat_id)
+                    f_errors.append(f"  ❌ {name}: {e}")
+
+            total_ok += f_ok
+            total_fail += f_fail
+            gate_title = folder.get("gate_title") or gate_id
+            lines.append(
+                f"📂 **{folder_name}** (gate: {gate_title})\n"
+                f"   ✅ {f_ok} | ❌ {f_fail} kênh"
+            )
+            lines.extend(f_errors[:5])
+
+        lines.append(f"\n**Tổng:** ✅ {total_ok} | ❌ {total_fail}")
+        return "\n".join(lines)

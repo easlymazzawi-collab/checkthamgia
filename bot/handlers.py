@@ -86,6 +86,35 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         result = await userbot_service.add_from_addlist(addlist_url, gate_chat.id)
         await message.answer(result[:4000], parse_mode="Markdown")
 
+    @router.message(Command("all"))
+    async def cmd_all(message: Message) -> None:
+        """Mời bot vào tất cả kênh của mọi folder đang quản lý."""
+        if not is_admin(message.from_user.id):
+            return
+        if not userbot_service:
+            await message.answer("❌ Userbot chưa chạy — cần API_ID/API_HASH trong .env")
+            return
+
+        folders = await db.list_folders()
+        if not folders:
+            await message.answer(
+                "❌ Chưa có folder nào.\n"
+                "Dùng `/add link @gate` hoặc **📁 Mời bot (folder)** trước.",
+                parse_mode="Markdown",
+            )
+            return
+
+        await message.answer(
+            f"⏳ Đang mời bot vào **{len(folders)}** folder đang quản lý...",
+            parse_mode="Markdown",
+        )
+        me = await message.bot.get_me()
+        await db.set_setting("bot_username", me.username or "")
+        userbot_service.bot_username = me.username or ""
+
+        result = await userbot_service.invite_bot_to_all_managed()
+        await message.answer(result[:4000], parse_mode="Markdown")
+
     @router.message(CommandStart())
     async def cmd_start(message: Message) -> None:
         if not is_admin(message.from_user.id):
