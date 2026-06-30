@@ -10,6 +10,7 @@ import logging
 import sys
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramUnauthorizedError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -27,20 +28,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _print_token_help() -> None:
+    env_path = config.ENV_FILE.resolve()
+    print(
+        "\n"
+        "❌ BOT_TOKEN không hợp lệ hoặc chưa cấu hình!\n"
+        "\n"
+        "Cách lấy token:\n"
+        "  1. Mở Telegram → tìm @BotFather\n"
+        "  2. Gửi /newbot (hoặc /token nếu bot đã có)\n"
+        "  3. Copy token dạng: 7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
+        f"  4. Dán vào file: {env_path}\n"
+        "     BOT_TOKEN=7123456789:AAHxxxxxxxx\n"
+        "\n"
+        "Lưu ý:\n"
+        "  - Không có dấu cách, không có dấu ngoặc kép\n"
+        "  - Không dùng token mẫu 123456:ABC-DEF từ .env.example\n"
+        "  - ADMIN_IDS = ID Telegram của bạn (lấy từ @userinfobot)\n"
+    )
+
+
 async def main() -> None:
-    if not config.BOT_TOKEN:
-        logger.error("Set BOT_TOKEN in .env")
+    if not config.is_bot_token_configured():
+        logger.error("BOT_TOKEN chưa được cấu hình đúng trong .env")
+        _print_token_help()
         sys.exit(1)
     if not config.ADMIN_IDS:
-        logger.error("Set ADMIN_IDS in .env")
+        logger.error("Set ADMIN_IDS in .env (ID Telegram của bạn, lấy từ @userinfobot)")
         sys.exit(1)
 
     db = ClenderDB(config.DB_PATH)
     await db.init()
 
     bot = Bot(token=config.BOT_TOKEN)
-    me = await bot.get_me()
+    try:
+        me = await bot.get_me()
+    except TelegramUnauthorizedError:
+        logger.error("Telegram từ chối token — Unauthorized")
+        _print_token_help()
+        await bot.session.close()
+        sys.exit(1)
+
     await db.set_setting("bot_username", me.username or "")
+    logger.info("Bot connected: @%s", me.username or me.id)
 
     userbot: UserbotService | None = None
     if config.API_ID and config.API_HASH:
@@ -56,7 +86,6 @@ async def main() -> None:
 
     dp = create_dispatcher(db, userbot)
 
-    # Scheduler backup
     scheduler = AsyncIOScheduler()
     hours_str = await db.get_setting("backup_interval_hours", str(config.BACKUP_INTERVAL_HOURS))
     hours = int(hours_str)

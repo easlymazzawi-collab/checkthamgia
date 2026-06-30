@@ -9,9 +9,11 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
+ENV_FILE = BASE_DIR / ".env"
+
+BOT_TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
+API_ID = int(os.getenv("API_ID", "0") or "0")
+API_HASH = (os.getenv("API_HASH") or "").strip()
 USERBOT_SESSION = os.getenv("USERBOT_SESSION", "checkthamgia")
 ADMIN_IDS: list[int] = [
     int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()
@@ -22,3 +24,14 @@ SESSION_PATH = DATA_DIR / USERBOT_SESSION
 
 # Broadcast: chờ bao lâu không có tin mới trước khi hỏi xác nhận (giây)
 BROADCAST_IDLE_SECONDS = float(os.getenv("BROADCAST_IDLE_SECONDS", "1.0"))
+
+_PLACEHOLDER_TOKENS = {
+    "",
+    "123456:ABC-DEF",
+    "your_bot_token",
+    "BOT_TOKEN",
+}
+
+
+def is_bot_token_configured() -> bool:
+    return BOT_TOKEN not in _PLACEHOLDER_TOKENS and ":" in BOT_TOKEN

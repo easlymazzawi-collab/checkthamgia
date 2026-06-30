@@ -18,10 +18,16 @@ echo Dung lenh: %PY%
 if not exist .env (
     if exist .env.example (
         copy .env.example .env >nul
-        echo Da tao file .env - hay sua BOT_TOKEN, API_ID, API_HASH, ADMIN_IDS
+        echo.
+        echo ========================================
+        echo  QUAN TRONG: Mo file .env va dien:
+        echo    BOT_TOKEN  - lay tu @BotFather
+        echo    ADMIN_IDS  - lay tu @userinfobot
+        echo ========================================
+        echo.
     )
 ) else (
-    echo File .env da ton tai
+    echo File .env da ton tai - kiem tra BOT_TOKEN da dung chua
 )
 
 echo.
