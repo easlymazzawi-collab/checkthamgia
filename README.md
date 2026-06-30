@@ -17,40 +17,55 @@ Tool kiểm tra & tự duyệt tham gia kênh Telegram — Bot + Userbot + kho d
 
 ## Cài đặt
 
+### Windows (CMD)
+
+```cmd
+cd C:\Users\Admin\Documents\checkthamgia-cursor-checkthamgia-tool-9fbc
+setup.bat
+```
+
+Sửa file `.env` (BOT_TOKEN, API_ID, API_HASH, ADMIN_IDS), rồi:
+
+```cmd
+run.bat
+```
+
+Hoặc thủ công:
+
+```cmd
+py -m pip install -r requirements.txt
+copy .env.example .env
+py main.py
+```
+
+> **Lưu ý:** Không chạy trực tiếp `main.py` bằng double-click — phải cài thư viện trước bằng `setup.bat` hoặc `pip install -r requirements.txt`, rồi dùng `py main.py`.
+
+### Linux / Mac
+
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
 # Sửa .env: BOT_TOKEN, API_ID, API_HASH, ADMIN_IDS
+python3 main.py
 ```
-
-### Lần đầu chạy userbot
-
-Userbot cần đăng nhập Telegram (my.telegram.org):
-
-```bash
-python main.py
-```
-
-Nhập số điện thoại và mã OTP khi được hỏi. Session lưu tại `data/checkthamgia.session`.
 
 ## Cấu hình bot
 
 1. `/start` — menu admin
-2. **Cấu hình** → thêm nhiều gate + kênh đích, gán gate cho từng kênh (bật join request)
-3. **Mời bot (folder)** → userbot add bot vào kênh (bot cần quyền admin sau đó)
-4. **Bot** phải là admin kênh gate & đích, có quyền **Invite users via link** / duyệt join request
-5. Userbot account chỉ cần quyền add member vào kênh (để mời bot)
+2. **Cấu hình → Set gate cho folder** — chọn folder + kênh gate riêng của folder đó
+3. **Mời bot (folder)** — userbot add bot vào tất cả kênh trong folder (tự gán gate)
+4. **Bot** admin kênh gate & đích, bật join request
+5. **Userbot** chỉ add bot vào kênh
 
 ## Luồng tự duyệt
 
 ```
-Member gửi join request kênh đích
-        ↓
-Member vào kênh gate (chỉ định)
-        ↓
-Bot phát hiện (chat_member) → approve_chat_join_request
-        ↓
-Cập nhật clender DB + thông báo admin
+Folder VIP          Folder Premium
+  Gate: @check-vip    Gate: @check-premium
+  → Kênh A, B         → Kênh C, D
+
+Member request join Kênh A → phải vào @check-vip → bot duyệt
+Member request join Kênh C → phải vào @check-premium → bot duyệt
 ```
 
 ## Broadcast
