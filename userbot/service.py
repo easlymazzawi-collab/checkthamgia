@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 
 from telethon import TelegramClient
-from telethon.tl.functions.channels import InviteToChannelRequest
+from telethon.tl.functions.channels import EditAdminRequest, InviteToChannelRequest
 from telethon.tl.functions.chatlists import CheckChatlistInviteRequest
 from telethon.tl.functions.messages import GetDialogFiltersRequest
-from telethon.tl.types import Channel
+from telethon.tl.types import Channel, ChatAdminRights
 from telethon.tl.types.chatlists import ChatlistInvite, ChatlistInviteAlready
 
 import config
@@ -17,11 +17,35 @@ from utils.chatlist import parse_addlist_slug
 
 logger = logging.getLogger(__name__)
 
+# Quyền tối thiểu để bot duyệt join request
+_BOT_ADMIN_RIGHTS = ChatAdminRights(
+    change_info=False,
+    post_messages=False,
+    edit_messages=False,
+    delete_messages=False,
+    ban_users=True,
+    invite_users=True,
+    pin_messages=False,
+    add_admins=False,
+    anonymous=False,
+    manage_call=False,
+    other=False,
+    manage_topics=True,
+)
+
 
 def normalize_channel_id(entity) -> int:
     if isinstance(entity, Channel):
         return int(f"-100{entity.id}")
     return entity.id
+
+
+def _chat_kind(ch: Channel) -> str:
+    if getattr(ch, "broadcast", False):
+        return "channel"
+    if getattr(ch, "megagroup", False):
+        return "supergroup"
+    return "unknown"
 
 
 def _folder_title_from_invite(invite: ChatlistInvite) -> str:
@@ -59,6 +83,40 @@ class UserbotService:
             self.bot_username = bot_username.lstrip("@")
         return await self.client.get_entity(self.bot_username)
 
+    async def _invite_bot_to_entity(self, entity, bot) -> None:
+        """Channel → invite. Supergroup → promote admin (bot không add được như member)."""
+        assert self.client
+        if isinstance(entity, Channel) and getattr(entity, "broadcast", False):
+            await self.client(InviteToChannelRequest(entity, [bot]))
+            return
+        if isinstance(entity, Channel) and getattr(entity, "megagroup", False):
+            await self.client(
+                EditAdminRequest(entity, bot, _BOT_ADMIN_RIGHTS, rank="Approved Bot")
+            )
+            return
+        raise ValueError("Chỉ hỗ trợ Channel/Supergroup — không phải group thường")
+
+    async def _invite_one(
+        self,
+        entity,
+        bot,
+        folder_name: str,
+        gate_id: int,
+        *,
+        register: bool = True,
+    ) -> str:
+        title = getattr(entity, "title", str(entity))
+        cid = normalize_channel_id(entity) if isinstance(entity, Channel) else entity.id
+        kind = _chat_kind(entity) if isinstance(entity, Channel) else "?"
+
+        if cid == gate_id:
+            return f"⏭️ {title} (gate)"
+
+        await self._invite_bot_to_entity(entity, bot)
+        if register:
+            await self.db.add_channel(cid, title, "target", folder_name, gate_id)
+        return f"✅ {title} [{kind}]"
+
     async def _invite_channels(
         self,
         channels: list[Channel],
@@ -71,7 +129,7 @@ class UserbotService:
         gate_lines: list[str] = []
         try:
             gate_ent = await self.client.get_entity(gate_id)
-            await self.client(InviteToChannelRequest(gate_ent, [bot]))
+            await self._invite_bot_to_entity(gate_ent, bot)
             gate_title = getattr(gate_ent, "title", str(gate_id))
             await self.db.set_folder_gate(folder_name, gate_id, gate_title)
             gate_lines.append(f"🔑 Gate: {gate_title}")
@@ -86,31 +144,27 @@ class UserbotService:
                 skipped += 1
                 continue
             try:
-                await self.client(InviteToChannelRequest(ch, [bot]))
-                await self.db.add_channel(
-                    cid,
-                    ch.title or str(ch.id),
-                    "target",
-                    folder_name,
-                    gate_id,
-                )
-                ok += 1
-                lines.append(f"✅ {ch.title}")
+                line = await self._invite_one(ch, bot, folder_name, gate_id)
+                if line.startswith("✅"):
+                    ok += 1
+                lines.append(line)
             except Exception as e:
                 fail += 1
-                lines.append(f"❌ {ch.title}: {e}")
+                kind = _chat_kind(ch)
+                err = str(e).split("(")[0].strip()
+                lines.append(f"❌ {ch.title} [{kind}]: {err}")
 
         await self.db.apply_folder_gate_to_targets(folder_name)
 
         header = (
             f"📂 {folder_name}\n"
             f"🔑 Gate: {gate_id}\n"
-            f"📁 {ok} kênh đích | bỏ qua gate {skipped} | lỗi {fail}\n"
+            f"📁 ✅ {ok} | ❌ {fail} | ⏭️ {skipped}\n"
+            f"(channel + supergroup OK | group thường không hỗ trợ)\n"
         )
-        return header + "\n".join(gate_lines + lines[:30])
+        return header + "\n".join(gate_lines + lines[:35])
 
     async def add_from_addlist(self, addlist_url: str, gate_channel_id: int) -> str:
-        """Thêm nhanh từ link t.me/addlist/... + kênh gate."""
         assert self.client
         slug = parse_addlist_slug(addlist_url)
         if not slug:
@@ -138,7 +192,6 @@ class UserbotService:
     async def invite_bot_to_folder(
         self, folder_name: str, gate_channel_id: int | None = None
     ) -> str:
-        """Mời bot vào kênh trong folder Telegram (theo tên folder)."""
         assert self.client
         if not folder_name:
             return "❌ Phải nhập tên folder"
@@ -170,11 +223,10 @@ class UserbotService:
         return await self._invite_channels(channels, gate_id, resolved_folder)
 
     async def invite_bot_to_all_managed(self) -> str:
-        """Mời bot vào tất cả kênh (gate + đích) của mọi folder đang quản lý trong DB."""
         assert self.client
         folders = await self.db.list_folders()
         if not folders:
-            return "❌ Chưa có folder nào.\nDùng `/add` hoặc **Mời bot (folder)** trước."
+            return "❌ Chưa có folder nào.\nDùng `/add` hoặc Mời bot (folder) trước."
 
         bot = await self._ensure_bot()
         lines: list[str] = ["🚀 Mời bot vào tất cả folder đang quản lý\n"]
@@ -200,15 +252,16 @@ class UserbotService:
             f_ok, f_fail = 0, 0
             f_errors: list[str] = []
             for chat_id in chat_ids:
+                ch = await self.db.get_channel(chat_id)
+                name = (ch or {}).get("title", chat_id)
                 try:
                     ent = await self.client.get_entity(chat_id)
-                    await self.client(InviteToChannelRequest(ent, [bot]))
+                    await self._invite_bot_to_entity(ent, bot)
                     f_ok += 1
                 except Exception as e:
                     f_fail += 1
-                    ch = await self.db.get_channel(chat_id)
-                    name = (ch or {}).get("title", chat_id)
-                    f_errors.append(f"  ❌ {name}: {e}")
+                    err = str(e).split("(")[0].strip()
+                    f_errors.append(f"  ❌ {name}: {err}")
 
             total_ok += f_ok
             total_fail += f_fail
