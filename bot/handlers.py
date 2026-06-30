@@ -32,6 +32,7 @@ class ConfigStates(StatesGroup):
     waiting_target = State()
     waiting_target_gate = State()
     waiting_backup_hours = State()
+    waiting_member_msg = State()
 
 
 class BroadcastStates(StatesGroup):
@@ -313,6 +314,61 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             for t in targets:
                 lines.append(f"  • {t['title']} `{t['chat_id']}`")
         await cb.message.answer("\n".join(lines), parse_mode="Markdown")
+
+    @router.callback_query(F.data == "cfg_member_msg")
+    async def cfg_member_msg(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.answer()
+        await state.set_state(ConfigStates.waiting_member_msg)
+        need = await db.get_setting("member_msg_need_gate", "")
+        approved = await db.get_setting("member_msg_approved", "")
+        await cb.message.answer(
+            "✏️ **Tin nhắn gửi member**\n\n"
+            "Gửi theo format (3 dòng, phân cách `---`):\n"
+            "`NEED_GATE` — chưa vào gate\n"
+            "`APPROVED` — đã duyệt\n"
+            "`GATE_WAIT` — vào gate, chờ request\n\n"
+            "Biến: `{target}` `{gate}` `{count}`\n\n"
+            "Gửi `reset` để dùng mặc định.\n"
+            "Gửi `xem` để xem tin hiện tại.",
+            parse_mode="Markdown",
+        )
+
+    @router.message(ConfigStates.waiting_member_msg)
+    async def set_member_msg(message: Message, state: FSMContext) -> None:
+        text = (message.text or "").strip()
+        if text.lower() == "xem":
+            from bot.member_notify import (
+                DEFAULT_APPROVED,
+                DEFAULT_GATE_WAIT,
+                DEFAULT_NEED_GATE,
+            )
+
+            await message.answer(
+                "NEED_GATE:\n"
+                + await db.get_setting("member_msg_need_gate", DEFAULT_NEED_GATE)
+                + "\n\nAPPROVED:\n"
+                + await db.get_setting("member_msg_approved", DEFAULT_APPROVED)
+                + "\n\nGATE_WAIT:\n"
+                + await db.get_setting("member_msg_gate_wait", DEFAULT_GATE_WAIT)
+            )
+            return
+        if text.lower() == "reset":
+            for k in ("member_msg_need_gate", "member_msg_approved", "member_msg_gate_wait", "member_msg_gate_ok"):
+                await db.set_setting(k, "")
+            await state.clear()
+            await message.answer("✅ Đã reset tin nhắn member về mặc định")
+            return
+        parts = text.split("---")
+        if len(parts) < 3:
+            await message.answer("❌ Cần 3 phần cách nhau bởi ---")
+            return
+        await db.set_setting("member_msg_need_gate", parts[0].strip())
+        await db.set_setting("member_msg_approved", parts[1].strip())
+        await db.set_setting("member_msg_gate_wait", parts[2].strip())
+        if len(parts) >= 4 and parts[3].strip():
+            await db.set_setting("member_msg_gate_ok", parts[3].strip())
+        await state.clear()
+        await message.answer("✅ Đã lưu tin nhắn member")
 
     @router.callback_query(F.data == "cfg_backup_hours")
     async def cfg_backup(cb: CallbackQuery, state: FSMContext) -> None:
