@@ -45,9 +45,9 @@ def is_admin(user_id: int) -> bool:
 def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
     dp.include_router(router)
 
-    @router.message(Command("add", "addd"))
+    @router.message(Command("add", "addd", "botaddf"))
     async def cmd_add(message: Message) -> None:
-        """Thêm nhanh: /add https://t.me/addlist/XXX @kenhmember"""
+        """Thêm folder + gate + mời bot — giống /botaddf trong tool_tauto_bot."""
         if not is_admin(message.from_user.id):
             return
         if not userbot_service:
@@ -123,8 +123,8 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
         await message.answer(
             "👋 Check Tham Gia Bot\n\n"
-            "• `/add` link addlist + @gate — thêm folder nhanh\n"
-            "• `/all` — mời bot vào **tất cả** folder đang quản lý\n"
+            "• `/add` link + @gate — thêm folder + mời bot (giống /botaddf)\n"
+            "• `/all` — mời bot vào tất cả folder (giống /botadd all)\n"
             "• Mỗi **folder** có 1 kênh gate riêng — member phải vào gate mới duyệt\n"
             "• Bot tự duyệt join request khi vào đúng gate của folder\n"
             "• Userbot chỉ dùng để add bot vào kênh qua folder\n"

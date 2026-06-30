@@ -94,8 +94,8 @@ async def _handle_gate_join(
     name = username or first_name or str(user_id)
     await _notify_admins(
         bot,
-        f"✅ Vào gate `{gate_title}`\n"
-        f"👤 {name} (`{user_id}`)\n"
+        f"✅ Vào gate {gate_title}\n"
+        f"👤 {name} ({user_id})\n"
         f"🎯 Kênh đích liên quan: {len(target_ids)}\n"
         f"{'🔓 Bot đã tự duyệt' if approved_any else '⏳ Chưa có join request'}",
     )
