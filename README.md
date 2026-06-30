@@ -6,8 +6,8 @@ Tool kiểm tra & tự duyệt tham gia kênh Telegram — Bot + Userbot + kho d
 
 | Tính năng | Mô tả |
 |-----------|--------|
-| **Kênh chỉ định (gate)** | Member muốn vào kênh đích phải vào kênh gate trước |
-| **Đa kênh (multi)** | Nhiều kênh đích + nhiều gate, mỗi kênh đích gắn gate riêng |
+| **Folder → Gate** | Mỗi folder Telegram có **1 kênh gate riêng** — member phải vào gate đó |
+| **Đa folder** | Folder A → gate A, Folder B → gate B; kênh trong folder tự gắn gate |
 | **Tự duyệt (Bot)** | Bot duyệt join request khi member vào **đúng gate** của kênh đích |
 | **Userbot** | Chỉ dùng mời bot vào kênh qua folder Telegram, không duyệt |
 | **Cập nhật dữ liệu** | Lưu user/events vào SQLite (`clender.db`), thông báo admin qua bot |

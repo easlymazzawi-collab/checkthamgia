@@ -40,9 +40,18 @@ class UserbotService:
         logger.info("Userbot started as %s (add-bot only)", me.username or me.id)
         return self.client
 
-    async def invite_bot_to_folder(self, folder_id: int | None = None, folder_name: str = "") -> str:
-        """Mời bot vào tất cả kênh trong folder Telegram."""
+    async def invite_bot_to_folder(
+        self, folder_name: str, gate_channel_id: int | None = None
+    ) -> str:
+        """Mời bot vào kênh trong folder. Mỗi folder dùng 1 gate riêng."""
         assert self.client
+        if not folder_name:
+            return "❌ Phải nhập tên folder"
+
+        gate_id = gate_channel_id or await self.db.get_folder_gate(folder_name)
+        if not gate_id:
+            return "NO_GATE"
+
         if not self.bot_username:
             bot_username = await self.db.get_setting("bot_username")
             if not bot_username:
@@ -51,41 +60,63 @@ class UserbotService:
 
         bot = await self.client.get_entity(self.bot_username)
         channels: list[Channel] = []
+        resolved_folder = folder_name
 
-        if folder_id is not None or folder_name:
-            result = await self.client(GetDialogFiltersRequest())
-            for f in result.filters:
-                if folder_id is not None and getattr(f, "id", None) != folder_id:
+        result = await self.client(GetDialogFiltersRequest())
+        for f in result.filters:
+            if getattr(f, "title", "") != folder_name:
+                continue
+            resolved_folder = getattr(f, "title", folder_name)
+            for peer in getattr(f, "include_peers", []) or []:
+                try:
+                    ent = await self.client.get_entity(peer)
+                    if isinstance(ent, Channel):
+                        channels.append(ent)
+                except Exception:
                     continue
-                if folder_name and getattr(f, "title", "") != folder_name:
-                    continue
-                for peer in getattr(f, "include_peers", []) or []:
-                    try:
-                        ent = await self.client.get_entity(peer)
-                        if isinstance(ent, Channel):
-                            channels.append(ent)
-                    except Exception:
-                        continue
-                break
-        else:
-            async for dialog in self.client.iter_dialogs():
-                if isinstance(dialog.entity, Channel) and dialog.entity.broadcast:
-                    channels.append(dialog.entity)
+            break
 
         if not channels:
-            return "❌ Không tìm thấy kênh trong folder"
+            return f"❌ Không tìm thấy folder `{folder_name}` hoặc folder trống"
 
-        ok, fail = 0, 0
+        # Mời bot vào gate trước
+        gate_lines: list[str] = []
+        try:
+            gate_ent = await self.client.get_entity(gate_id)
+            await self.client(InviteToChannelRequest(gate_ent, [bot]))
+            gate_title = getattr(gate_ent, "title", str(gate_id))
+            await self.db.set_folder_gate(resolved_folder, gate_id, gate_title)
+            gate_lines.append(f"🔑 Gate: {gate_title}")
+        except Exception as e:
+            gate_lines.append(f"⚠️ Gate ({gate_id}): {e}")
+
+        ok, fail, skipped = 0, 0, 0
         lines: list[str] = []
         for ch in channels:
+            cid = normalize_channel_id(ch)
+            if cid == gate_id:
+                skipped += 1
+                continue
             try:
                 await self.client(InviteToChannelRequest(ch, [bot]))
-                cid = normalize_channel_id(ch)
-                await self.db.add_channel(cid, ch.title or str(ch.id), "target", folder_name)
+                await self.db.add_channel(
+                    cid,
+                    ch.title or str(ch.id),
+                    "target",
+                    resolved_folder,
+                    gate_id,
+                )
                 ok += 1
                 lines.append(f"✅ {ch.title}")
             except Exception as e:
                 fail += 1
                 lines.append(f"❌ {ch.title}: {e}")
 
-        return f"📁 Mời bot vào {ok} kênh, lỗi {fail}\n" + "\n".join(lines[:30])
+        await self.db.apply_folder_gate_to_targets(resolved_folder)
+
+        header = (
+            f"📂 Folder: **{resolved_folder}**\n"
+            f"🔑 Gate riêng: `{gate_id}`\n"
+            f"📁 {ok} kênh đích, bỏ qua gate {skipped}, lỗi {fail}\n"
+        )
+        return header + "\n".join(gate_lines + lines[:25])

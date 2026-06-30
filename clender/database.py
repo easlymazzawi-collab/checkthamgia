@@ -64,6 +64,13 @@ class ClenderDB:
                     requested_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, target_channel_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS folders (
+                    folder_name TEXT PRIMARY KEY,
+                    gate_channel_id INTEGER NOT NULL,
+                    gate_title TEXT,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             await db.commit()
@@ -77,10 +84,99 @@ class ClenderDB:
             await db.commit()
         except Exception:
             pass
+        try:
+            await db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS folders (
+                    folder_name TEXT PRIMARY KEY,
+                    gate_channel_id INTEGER NOT NULL,
+                    gate_title TEXT,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            await db.commit()
+        except Exception:
+            pass
+
+    async def set_folder_gate(
+        self, folder_name: str, gate_channel_id: int, gate_title: str = ""
+    ) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO folders (folder_name, gate_channel_id, gate_title, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(folder_name) DO UPDATE SET
+                    gate_channel_id = excluded.gate_channel_id,
+                    gate_title = excluded.gate_title
+                """,
+                (folder_name, gate_channel_id, gate_title, _now()),
+            )
+            await db.commit()
+        await self.add_channel(
+            gate_channel_id, gate_title or folder_name, "gate", folder_name, gate_channel_id
+        )
+        await self.apply_folder_gate_to_targets(folder_name)
+
+    async def get_folder_gate(self, folder_name: str) -> int | None:
+        if not folder_name:
+            return None
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT gate_channel_id FROM folders WHERE folder_name = ?", (folder_name,)
+            ) as cur:
+                row = await cur.fetchone()
+                return int(row[0]) if row else None
+
+    async def get_folder(self, folder_name: str) -> dict | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM folders WHERE folder_name = ?", (folder_name,)
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+    async def list_folders(self) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM folders ORDER BY folder_name") as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
+
+    async def apply_folder_gate_to_targets(self, folder_name: str) -> int:
+        gate_id = await self.get_folder_gate(folder_name)
+        if not gate_id:
+            return 0
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                """
+                UPDATE channels SET gate_channel_id = ?
+                WHERE channel_type = 'target' AND folder_name = ?
+                """,
+                (gate_id, folder_name),
+            )
+            await db.commit()
+            return cur.rowcount
+
+    async def list_targets_by_folder(self, folder_name: str) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM channels WHERE channel_type='target' AND folder_name=? ORDER BY id",
+                (folder_name,),
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
 
     async def get_gate_channel_ids(self) -> list[int]:
         gates = await self.list_channels("gate")
         ids = [g["chat_id"] for g in gates]
+        for f in await self.list_folders():
+            gid = f["gate_channel_id"]
+            if gid not in ids:
+                ids.append(gid)
         legacy = await self.get_setting("gate_channel_id")
         if legacy:
             lid = int(legacy)
@@ -89,6 +185,15 @@ class ClenderDB:
         return ids
 
     async def get_gate_for_target(self, target_channel_id: int) -> int | None:
+        ch = await self.get_channel(target_channel_id)
+        if ch:
+            if ch.get("gate_channel_id"):
+                return int(ch["gate_channel_id"])
+            folder = ch.get("folder_name") or ""
+            if folder:
+                fg = await self.get_folder_gate(folder)
+                if fg:
+                    return fg
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
                 "SELECT gate_channel_id FROM channels WHERE chat_id = ? AND channel_type = 'target'",
@@ -101,19 +206,25 @@ class ClenderDB:
         return gates[0] if gates else None
 
     async def get_targets_for_gate(self, gate_id: int) -> list[int]:
-        """Kênh đích gắn với gate này (hoặc chưa gán gate → dùng gate mặc định đầu tiên)."""
         targets = await self.list_channels("target")
-        gates = await self.get_gate_channel_ids()
-        default_gate = gates[0] if gates else None
+        folders = await self.list_folders()
+        folder_names = {f["folder_name"] for f in folders if f["gate_channel_id"] == gate_id}
         result: list[int] = []
         for t in targets:
             g = t.get("gate_channel_id")
-            if g:
-                if int(g) == gate_id:
-                    result.append(t["chat_id"])
-            elif default_gate == gate_id:
+            if g and int(g) == gate_id:
+                result.append(t["chat_id"])
+            elif not g and t.get("folder_name") in folder_names:
                 result.append(t["chat_id"])
         return result
+
+    async def set_channel_folder(self, chat_id: int, folder_name: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE channels SET folder_name = ? WHERE chat_id = ?",
+                (folder_name, chat_id),
+            )
+            await db.commit()
 
     async def set_target_gate(self, target_channel_id: int, gate_channel_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -403,7 +514,7 @@ class ClenderDB:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             data: dict[str, Any] = {"exported_at": _now()}
-            for table in ("settings", "channels", "users", "join_events", "pending_requests"):
+            for table in ("settings", "channels", "users", "join_events", "pending_requests", "folders"):
                 async with db.execute(f"SELECT * FROM {table}") as cur:
                     rows = await cur.fetchall()
                     data[table] = [dict(r) for r in rows]

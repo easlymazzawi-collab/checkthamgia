@@ -24,13 +24,13 @@ router = Router()
 
 
 class ConfigStates(StatesGroup):
-    waiting_gate = State()
+    waiting_folder_name = State()
+    waiting_folder_gate = State()
+    waiting_invite_folder = State()
+    waiting_invite_folder_gate = State()
     waiting_target = State()
     waiting_target_gate = State()
-    waiting_link_target = State()
-    waiting_link_gate = State()
     waiting_backup_hours = State()
-    waiting_folder_name = State()
 
 
 class BroadcastStates(StatesGroup):
@@ -51,8 +51,8 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
         await message.answer(
             "👋 Check Tham Gia Bot\n\n"
-            "• Hỗ trợ **đa kênh**: nhiều kênh đích, mỗi kênh gắn gate riêng\n"
-            "• Bot tự duyệt join request khi member vào đúng gate\n"
+            "• Mỗi **folder** có 1 kênh gate riêng — member phải vào gate mới duyệt\n"
+            "• Bot tự duyệt join request khi vào đúng gate của folder\n"
             "• Userbot chỉ dùng để add bot vào kênh qua folder\n"
             "• Broadcast bằng copy message\n"
             "• Backup tự động theo giờ cấu hình",
@@ -65,24 +65,29 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
         s = await db.stats_summary()
         gates = await db.list_channels("gate")
+        folders = await db.list_folders()
         targets = await db.list_channels("target")
         by_ch = await db.stats_by_channel()
         recent = await db.recent_events(15)
 
         lines = [
-            "📊 **Thống kê (multi-kênh)**",
+            "📊 **Thống kê**",
             f"👥 Tổng user: {s['total_users']}",
             f"🚪 Vào gate: {s['gate_joined']} | ✅ Duyệt: {s['approved']}",
-            f"🔑 Gate: {len(gates)} | 🎯 Kênh đích: {len(targets)}",
+            f"📂 Folder: {len(folders)} | 🔑 Gate: {len(gates)} | 🎯 Kênh đích: {len(targets)}",
             "",
-            "**Theo kênh:**",
+            "**Theo folder:**",
         ]
+        for f in folders:
+            cnt = len(await db.list_targets_by_folder(f["folder_name"]))
+            lines.append(
+                f"• 📂 {f['folder_name']} → gate `{f.get('gate_title') or f['gate_channel_id']}` ({cnt} kênh)"
+            )
         if by_ch:
-            for row in by_ch:
+            lines.extend(["", "**Theo kênh:**"])
+            for row in by_ch[:10]:
                 title = row.get("channel_title") or row["channel_id"]
                 lines.append(f"• {title} [{row['event_type']}]: {row['cnt']}")
-        else:
-            lines.append("• Chưa có sự kiện")
         lines.extend(["", "**Gần đây:**"])
         for ev in recent:
             lines.append(
@@ -102,34 +107,52 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             parse_mode="Markdown",
         )
 
-    @router.callback_query(F.data == "cfg_gate")
-    async def cfg_gate(cb: CallbackQuery, state: FSMContext) -> None:
+    @router.callback_query(F.data == "cfg_folder_gate")
+    async def cfg_folder_gate(cb: CallbackQuery, state: FSMContext) -> None:
         await cb.answer()
-        await state.set_state(ConfigStates.waiting_gate)
+        await state.set_state(ConfigStates.waiting_folder_name)
         await cb.message.answer(
-            "Gửi ID hoặc @username **kênh gate** (có thể thêm nhiều gate).\n"
-            "Member phải vào đúng gate của kênh đích mới được duyệt."
+            "📂 Gửi **tên folder** Telegram.\n"
+            "Mỗi folder sẽ có 1 kênh gate riêng — member phải vào gate đó "
+            "mới được duyệt các kênh trong folder."
         )
 
-    @router.message(ConfigStates.waiting_gate)
-    async def set_gate(message: Message, state: FSMContext) -> None:
+    @router.message(ConfigStates.waiting_folder_name)
+    async def set_folder_name(message: Message, state: FSMContext) -> None:
+        folder = message.text.strip()
+        if not folder:
+            await message.answer("❌ Nhập tên folder")
+            return
+        await state.update_data(folder_name=folder)
+        await state.set_state(ConfigStates.waiting_folder_gate)
+        existing = await db.get_folder(folder)
+        hint = ""
+        if existing:
+            hint = f"\n(Gate hiện tại: `{existing.get('gate_title') or existing['gate_channel_id']}` — gửi mới để đổi)"
+        await message.answer(
+            f"Folder: **{folder}**\n"
+            f"Gửi @username hoặc chat_id **kênh gate** cho folder này.{hint}",
+            parse_mode="Markdown",
+        )
+
+    @router.message(ConfigStates.waiting_folder_gate)
+    async def set_folder_gate(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        folder = data.get("folder_name", "")
         text = message.text.strip()
         try:
-            if text.lstrip("-").isdigit():
-                chat = await message.bot.get_chat(int(text))
-            else:
-                chat = await message.bot.get_chat(text)
+            chat = await message.bot.get_chat(int(text) if text.lstrip("-").isdigit() else text)
         except Exception as e:
-            await message.answer(f"❌ Không lấy được kênh (bot phải là admin): {e}")
+            await message.answer(f"❌ Không lấy được kênh gate (bot phải là admin): {e}")
             return
 
-        await db.set_gate_channel_id(chat.id)
-        await db.add_channel(chat.id, chat.title or text, "gate")
+        await db.set_folder_gate(folder, chat.id, chat.title or text)
+        updated = await db.apply_folder_gate_to_targets(folder)
         await state.clear()
-        gates = await db.list_channels("gate")
         await message.answer(
-            f"✅ Thêm gate: {chat.title} (`{chat.id}`)\n"
-            f"Tổng gate: {len(gates)}",
+            f"✅ Folder **{folder}**\n"
+            f"🔑 Gate: {chat.title} (`{chat.id}`)\n"
+            f"🔗 Đã gán gate cho {updated} kênh đích trong folder",
             parse_mode="Markdown",
         )
 
@@ -152,135 +175,69 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
 
         await db.add_channel(chat.id, chat.title or text, "target")
-        gates = await db.list_channels("gate")
-        if len(gates) == 1:
-            await db.set_target_gate(chat.id, gates[0]["chat_id"])
+        folders = await db.list_folders()
+        if len(folders) == 1:
+            await db.set_target_gate(chat.id, folders[0]["gate_channel_id"])
             await state.clear()
             await message.answer(
                 f"✅ Kênh đích: {chat.title} (`{chat.id}`)\n"
-                f"🔗 Gate: {gates[0]['title']}",
+                f"🔗 Gate folder `{folders[0]['folder_name']}`",
                 parse_mode="Markdown",
             )
-        elif gates:
+        elif folders:
             await state.update_data(pending_target_id=chat.id, pending_target_title=chat.title)
             await state.set_state(ConfigStates.waiting_target_gate)
-            gate_lines = "\n".join(f"• {g['title']} `{g['chat_id']}`" for g in gates)
+            flines = "\n".join(
+                f"• {f['folder_name']} → gate `{f.get('gate_title') or f['gate_channel_id']}`"
+                for f in folders
+            )
             await message.answer(
-                f"✅ Đã thêm kênh đích: {chat.title}\n\n"
-                f"Chọn gate (gửi chat_id):\n{gate_lines}",
+                f"✅ Kênh đích: {chat.title}\n\nGửi **tên folder** để gán gate:\n{flines}",
                 parse_mode="Markdown",
             )
         else:
             await state.clear()
             await message.answer(
                 f"✅ Kênh đích: {chat.title} (`{chat.id}`)\n"
-                f"⚠️ Chưa có gate — thêm gate trước rồi dùng **Gán gate cho kênh đích**",
+                f"⚠️ Chưa có folder/gate — dùng **Set gate cho folder** trước",
                 parse_mode="Markdown",
             )
 
     @router.message(ConfigStates.waiting_target_gate)
-    async def set_target_gate_step(message: Message, state: FSMContext) -> None:
+    async def set_target_folder_step(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         target_id = data.get("pending_target_id")
-        if not target_id:
-            await state.clear()
+        folder_name = message.text.strip()
+        folder = await db.get_folder(folder_name)
+        if not folder:
+            await message.answer("❌ Folder chưa có gate — dùng **Set gate cho folder**")
             return
-        try:
-            gate_id = int(message.text.strip())
-        except ValueError:
-            await message.answer("❌ Gửi chat_id số của gate")
-            return
-        gate_ids = await db.get_gate_channel_ids()
-        if gate_id not in gate_ids:
-            await message.answer("❌ Gate không tồn tại trong hệ thống")
-            return
-        await db.set_target_gate(target_id, gate_id)
+        await db.set_target_gate(target_id, folder["gate_channel_id"])
+        await db.set_channel_folder(target_id, folder_name)
         await state.clear()
         target_title = data.get("pending_target_title", target_id)
-        gate = await db.get_channel(gate_id)
         await message.answer(
-            f"✅ `{target_title}` → gate `{gate.get('title') if gate else gate_id}`",
-            parse_mode="Markdown",
-        )
-
-    @router.callback_query(F.data == "cfg_link_gate")
-    async def cfg_link_gate(cb: CallbackQuery, state: FSMContext) -> None:
-        await cb.answer()
-        targets = await db.list_channels("target")
-        if not targets:
-            await cb.message.answer("❌ Chưa có kênh đích")
-            return
-        lines = ["Gửi **chat_id kênh đích** cần gán gate:"]
-        for t in targets:
-            g = t.get("gate_channel_id") or "chưa gán"
-            lines.append(f"• {t['title']} `{t['chat_id']}` → gate: {g}")
-        await state.set_state(ConfigStates.waiting_link_target)
-        await cb.message.answer("\n".join(lines), parse_mode="Markdown")
-
-    @router.message(ConfigStates.waiting_link_target)
-    async def link_target_step(message: Message, state: FSMContext) -> None:
-        try:
-            target_id = int(message.text.strip())
-        except ValueError:
-            await message.answer("❌ Gửi chat_id số")
-            return
-        ch = await db.get_channel(target_id)
-        if not ch or ch["channel_type"] != "target":
-            await message.answer("❌ Không phải kênh đích")
-            return
-        gates = await db.list_channels("gate")
-        if not gates:
-            await message.answer("❌ Chưa có gate")
-            await state.clear()
-            return
-        await state.update_data(link_target_id=target_id)
-        await state.set_state(ConfigStates.waiting_link_gate)
-        gate_lines = "\n".join(f"• {g['title']} `{g['chat_id']}`" for g in gates)
-        await message.answer(f"Chọn gate:\n{gate_lines}", parse_mode="Markdown")
-
-    @router.message(ConfigStates.waiting_link_gate)
-    async def link_gate_step(message: Message, state: FSMContext) -> None:
-        data = await state.get_data()
-        target_id = data.get("link_target_id")
-        try:
-            gate_id = int(message.text.strip())
-        except ValueError:
-            await message.answer("❌ Gửi chat_id gate")
-            return
-        if gate_id not in await db.get_gate_channel_ids():
-            await message.answer("❌ Gate không hợp lệ")
-            return
-        await db.set_target_gate(target_id, gate_id)
-        await state.clear()
-        t = await db.get_channel(target_id)
-        g = await db.get_channel(gate_id)
-        await message.answer(
-            f"🔗 {t.get('title')} → {g.get('title')}",
+            f"✅ `{target_title}` → folder `{folder_name}` → gate `{folder.get('gate_title')}`",
             parse_mode="Markdown",
         )
 
     @router.callback_query(F.data == "cfg_list")
     async def cfg_list(cb: CallbackQuery) -> None:
         await cb.answer()
-        channels = await db.list_channels()
-        if not channels:
-            await cb.message.answer("Chưa có kênh nào")
+        folders = await db.list_folders()
+        if not folders:
+            await cb.message.answer("Chưa có folder nào — dùng **Set gate cho folder**")
             return
-        lines = ["📋 **Multi-kênh**"]
-        gates = await db.list_channels("gate")
-        targets = await db.list_channels("target")
-        lines.append(f"\n🔑 **Gate ({len(gates)}):**")
-        for g in gates:
-            linked = [t for t in targets if t.get("gate_channel_id") == g["chat_id"]]
-            lines.append(f"• {g['title']} `{g['chat_id']}` → {len(linked)} kênh đích")
-        lines.append(f"\n🎯 **Kênh đích ({len(targets)}):**")
-        for c in targets:
-            g_id = c.get("gate_channel_id")
-            g_name = "mặc định"
-            if g_id:
-                g = await db.get_channel(g_id)
-                g_name = g.get("title", g_id) if g else g_id
-            lines.append(f"• {c['title']} `{c['chat_id']}` → gate: {g_name}")
+        lines = ["📋 **Folder & kênh**"]
+        for f in folders:
+            targets = await db.list_targets_by_folder(f["folder_name"])
+            lines.append(
+                f"\n📂 **{f['folder_name']}**"
+                f"\n🔑 Gate: {f.get('gate_title') or f['gate_channel_id']} `{f['gate_channel_id']}`"
+                f"\n🎯 {len(targets)} kênh đích:"
+            )
+            for t in targets:
+                lines.append(f"  • {t['title']} `{t['chat_id']}`")
         await cb.message.answer("\n".join(lines), parse_mode="Markdown")
 
     @router.callback_query(F.data == "cfg_backup_hours")
@@ -309,21 +266,52 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         if not userbot_service:
             await message.answer("❌ Userbot chưa chạy")
             return
-        await state.set_state(ConfigStates.waiting_folder_name)
+        await state.set_state(ConfigStates.waiting_invite_folder)
         await message.answer(
-            "Gửi **tên folder** Telegram (để trống = quét tất cả kênh broadcast):",
+            "📂 Gửi **tên folder** Telegram.\n"
+            "Userbot sẽ add bot vào các kênh trong folder.\n"
+            "Mỗi folder cần 1 kênh gate riêng (sẽ hỏi nếu chưa set).",
             parse_mode="Markdown",
         )
 
-    @router.message(ConfigStates.waiting_folder_name)
-    async def do_invite_folder(message: Message, state: FSMContext) -> None:
+    @router.message(ConfigStates.waiting_invite_folder)
+    async def invite_folder_name(message: Message, state: FSMContext) -> None:
         folder = message.text.strip()
+        if not folder:
+            await message.answer("❌ Nhập tên folder")
+            return
+        gate_id = await db.get_folder_gate(folder)
+        if gate_id:
+            await _run_invite(message, state, userbot_service, db, folder, gate_id)
+        else:
+            await state.update_data(invite_folder=folder)
+            await state.set_state(ConfigStates.waiting_invite_folder_gate)
+            await message.answer(
+                f"Folder **{folder}** chưa có gate.\n"
+                f"Gửi @username hoặc chat_id **kênh gate** cho folder này:",
+                parse_mode="Markdown",
+            )
+
+    @router.message(ConfigStates.waiting_invite_folder_gate)
+    async def invite_folder_gate(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        folder = data.get("invite_folder", "")
+        text = message.text.strip()
+        try:
+            chat = await message.bot.get_chat(int(text) if text.lstrip("-").isdigit() else text)
+        except Exception as e:
+            await message.answer(f"❌ {e}")
+            return
+        await db.set_folder_gate(folder, chat.id, chat.title or text)
+        await _run_invite(message, state, userbot_service, db, folder, chat.id)
+
+    async def _run_invite(message, state, userbot_service, db, folder, gate_id):
         me = await message.bot.get_me()
         await db.set_setting("bot_username", me.username or "")
         userbot_service.bot_username = me.username or ""
-        result = await userbot_service.invite_bot_to_folder(folder_name=folder)
+        result = await userbot_service.invite_bot_to_folder(folder, gate_id)
         await state.clear()
-        await message.answer(result[:4000])
+        await message.answer(result[:4000], parse_mode="Markdown")
 
     @router.message(F.text == "🔍 Quét duyệt")
     async def scan_approve(message: Message) -> None:

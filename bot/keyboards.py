@@ -15,10 +15,9 @@ def admin_menu() -> ReplyKeyboardMarkup:
 def config_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Thêm kênh gate", callback_data="cfg_gate")],
-            [InlineKeyboardButton(text="➕ Thêm kênh đích", callback_data="cfg_target_add")],
-            [InlineKeyboardButton(text="🔗 Gán gate cho kênh đích", callback_data="cfg_link_gate")],
-            [InlineKeyboardButton(text="📋 Xem tất cả kênh", callback_data="cfg_list")],
+            [InlineKeyboardButton(text="📂 Set gate cho folder", callback_data="cfg_folder_gate")],
+            [InlineKeyboardButton(text="➕ Thêm kênh đích (lẻ)", callback_data="cfg_target_add")],
+            [InlineKeyboardButton(text="📋 Xem folder & kênh", callback_data="cfg_list")],
             [InlineKeyboardButton(text="Set giờ backup", callback_data="cfg_backup_hours")],
         ]
     )
