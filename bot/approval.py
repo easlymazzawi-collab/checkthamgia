@@ -17,6 +17,8 @@ from bot.member_notify import (
     msg_need_gate,
 )
 
+from clender.database import ClenderDB, _now
+
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -28,8 +30,6 @@ async def _notify_member_simple(bot: Bot, user_id: int, text: str) -> None:
     except Exception as e:
         logger.warning("Không nhắn user %s: %s", user_id, e)
 
-
-from clender.database import ClenderDB, _now
 
 _MEMBER_STATUSES = {
     ChatMemberStatus.MEMBER,
@@ -126,9 +126,11 @@ async def _handle_gate_join(
 
     # Nhắn member
     if approved_count > 0:
-        await msg_gate_joined_approved(bot, db, user_id, gate_id, approved_count)
+        await msg_gate_joined_approved(
+            bot, db, user_id, gate_id, approved_count, username, first_name
+        )
     else:
-        await msg_gate_joined_wait(bot, db, user_id, gate_id)
+        await msg_gate_joined_wait(bot, db, user_id, gate_id, username, first_name)
 
     name = username or first_name or str(user_id)
     await _notify_admins(
