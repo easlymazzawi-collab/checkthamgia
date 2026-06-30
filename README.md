@@ -7,7 +7,8 @@ Tool kiểm tra & tự duyệt tham gia kênh Telegram — Bot + Userbot + kho d
 | Tính năng | Mô tả |
 |-----------|--------|
 | **Kênh chỉ định (gate)** | Member muốn vào kênh đích phải vào kênh gate trước |
-| **Tự duyệt (Bot)** | Bot là admin kênh đích → tự `approve_chat_join_request` khi member vào kênh gate |
+| **Đa kênh (multi)** | Nhiều kênh đích + nhiều gate, mỗi kênh đích gắn gate riêng |
+| **Tự duyệt (Bot)** | Bot duyệt join request khi member vào **đúng gate** của kênh đích |
 | **Userbot** | Chỉ dùng mời bot vào kênh qua folder Telegram, không duyệt |
 | **Cập nhật dữ liệu** | Lưu user/events vào SQLite (`clender.db`), thông báo admin qua bot |
 | **Broadcast** | Copy message, gửi nhiều bài, bấm Done → chờ 1s → xác nhận → gửi |
@@ -35,7 +36,7 @@ Nhập số điện thoại và mã OTP khi được hỏi. Session lưu tại `
 ## Cấu hình bot
 
 1. `/start` — menu admin
-2. **Cấu hình** → Set kênh chỉ định (gate) và kênh đích (bật join request)
+2. **Cấu hình** → thêm nhiều gate + kênh đích, gán gate cho từng kênh (bật join request)
 3. **Mời bot (folder)** → userbot add bot vào kênh (bot cần quyền admin sau đó)
 4. **Bot** phải là admin kênh gate & đích, có quyền **Invite users via link** / duyệt join request
 5. Userbot account chỉ cần quyền add member vào kênh (để mời bot)
