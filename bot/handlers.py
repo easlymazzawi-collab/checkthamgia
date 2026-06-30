@@ -26,6 +26,9 @@ router = Router()
 class ConfigStates(StatesGroup):
     waiting_gate = State()
     waiting_target = State()
+    waiting_target_gate = State()
+    waiting_link_target = State()
+    waiting_link_gate = State()
     waiting_backup_hours = State()
     waiting_folder_name = State()
 
@@ -48,8 +51,8 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
         await message.answer(
             "👋 Check Tham Gia Bot\n\n"
-            "• Member muốn vào kênh đích → phải vào kênh chỉ định trước\n"
-            "• Bot tự duyệt join request khi phát hiện vào kênh gate\n"
+            "• Hỗ trợ **đa kênh**: nhiều kênh đích, mỗi kênh gắn gate riêng\n"
+            "• Bot tự duyệt join request khi member vào đúng gate\n"
             "• Userbot chỉ dùng để add bot vào kênh qua folder\n"
             "• Broadcast bằng copy message\n"
             "• Backup tự động theo giờ cấu hình",
@@ -61,20 +64,26 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         if not is_admin(message.from_user.id):
             return
         s = await db.stats_summary()
-        gate_id = await db.get_gate_channel_id()
+        gates = await db.list_channels("gate")
         targets = await db.list_channels("target")
+        by_ch = await db.stats_by_channel()
         recent = await db.recent_events(15)
 
         lines = [
-            "📊 **Thống kê**",
-            f"👥 Tổng user trong DB: {s['total_users']}",
-            f"🚪 Vào kênh chỉ định: {s['gate_joined']} (events: {s['gate_events']})",
-            f"✅ Đã duyệt: {s['approved']} (events: {s['approve_events']})",
-            f"🎯 Kênh gate: `{gate_id or 'chưa set'}`",
-            f"📢 Kênh đích: {len(targets)}",
+            "📊 **Thống kê (multi-kênh)**",
+            f"👥 Tổng user: {s['total_users']}",
+            f"🚪 Vào gate: {s['gate_joined']} | ✅ Duyệt: {s['approved']}",
+            f"🔑 Gate: {len(gates)} | 🎯 Kênh đích: {len(targets)}",
             "",
-            "**Gần đây:**",
+            "**Theo kênh:**",
         ]
+        if by_ch:
+            for row in by_ch:
+                title = row.get("channel_title") or row["channel_id"]
+                lines.append(f"• {title} [{row['event_type']}]: {row['cnt']}")
+        else:
+            lines.append("• Chưa có sự kiện")
+        lines.extend(["", "**Gần đây:**"])
         for ev in recent:
             lines.append(
                 f"• [{ev['event_type']}] @{ev['username'] or ev['user_id']} "
@@ -98,8 +107,8 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         await cb.answer()
         await state.set_state(ConfigStates.waiting_gate)
         await cb.message.answer(
-            "Gửi ID hoặc @username kênh **chỉ định** (gate).\n"
-            "Member phải vào kênh này trước khi được duyệt."
+            "Gửi ID hoặc @username **kênh gate** (có thể thêm nhiều gate).\n"
+            "Member phải vào đúng gate của kênh đích mới được duyệt."
         )
 
     @router.message(ConfigStates.waiting_gate)
@@ -117,7 +126,12 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         await db.set_gate_channel_id(chat.id)
         await db.add_channel(chat.id, chat.title or text, "gate")
         await state.clear()
-        await message.answer(f"✅ Kênh chỉ định: {chat.title} (`{chat.id}`)", parse_mode="Markdown")
+        gates = await db.list_channels("gate")
+        await message.answer(
+            f"✅ Thêm gate: {chat.title} (`{chat.id}`)\n"
+            f"Tổng gate: {len(gates)}",
+            parse_mode="Markdown",
+        )
 
     @router.callback_query(F.data == "cfg_target_add")
     async def cfg_target(cb: CallbackQuery, state: FSMContext) -> None:
@@ -138,8 +152,112 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
             return
 
         await db.add_channel(chat.id, chat.title or text, "target")
+        gates = await db.list_channels("gate")
+        if len(gates) == 1:
+            await db.set_target_gate(chat.id, gates[0]["chat_id"])
+            await state.clear()
+            await message.answer(
+                f"✅ Kênh đích: {chat.title} (`{chat.id}`)\n"
+                f"🔗 Gate: {gates[0]['title']}",
+                parse_mode="Markdown",
+            )
+        elif gates:
+            await state.update_data(pending_target_id=chat.id, pending_target_title=chat.title)
+            await state.set_state(ConfigStates.waiting_target_gate)
+            gate_lines = "\n".join(f"• {g['title']} `{g['chat_id']}`" for g in gates)
+            await message.answer(
+                f"✅ Đã thêm kênh đích: {chat.title}\n\n"
+                f"Chọn gate (gửi chat_id):\n{gate_lines}",
+                parse_mode="Markdown",
+            )
+        else:
+            await state.clear()
+            await message.answer(
+                f"✅ Kênh đích: {chat.title} (`{chat.id}`)\n"
+                f"⚠️ Chưa có gate — thêm gate trước rồi dùng **Gán gate cho kênh đích**",
+                parse_mode="Markdown",
+            )
+
+    @router.message(ConfigStates.waiting_target_gate)
+    async def set_target_gate_step(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        target_id = data.get("pending_target_id")
+        if not target_id:
+            await state.clear()
+            return
+        try:
+            gate_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("❌ Gửi chat_id số của gate")
+            return
+        gate_ids = await db.get_gate_channel_ids()
+        if gate_id not in gate_ids:
+            await message.answer("❌ Gate không tồn tại trong hệ thống")
+            return
+        await db.set_target_gate(target_id, gate_id)
         await state.clear()
-        await message.answer(f"✅ Thêm kênh đích: {chat.title} (`{chat.id}`)", parse_mode="Markdown")
+        target_title = data.get("pending_target_title", target_id)
+        gate = await db.get_channel(gate_id)
+        await message.answer(
+            f"✅ `{target_title}` → gate `{gate.get('title') if gate else gate_id}`",
+            parse_mode="Markdown",
+        )
+
+    @router.callback_query(F.data == "cfg_link_gate")
+    async def cfg_link_gate(cb: CallbackQuery, state: FSMContext) -> None:
+        await cb.answer()
+        targets = await db.list_channels("target")
+        if not targets:
+            await cb.message.answer("❌ Chưa có kênh đích")
+            return
+        lines = ["Gửi **chat_id kênh đích** cần gán gate:"]
+        for t in targets:
+            g = t.get("gate_channel_id") or "chưa gán"
+            lines.append(f"• {t['title']} `{t['chat_id']}` → gate: {g}")
+        await state.set_state(ConfigStates.waiting_link_target)
+        await cb.message.answer("\n".join(lines), parse_mode="Markdown")
+
+    @router.message(ConfigStates.waiting_link_target)
+    async def link_target_step(message: Message, state: FSMContext) -> None:
+        try:
+            target_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("❌ Gửi chat_id số")
+            return
+        ch = await db.get_channel(target_id)
+        if not ch or ch["channel_type"] != "target":
+            await message.answer("❌ Không phải kênh đích")
+            return
+        gates = await db.list_channels("gate")
+        if not gates:
+            await message.answer("❌ Chưa có gate")
+            await state.clear()
+            return
+        await state.update_data(link_target_id=target_id)
+        await state.set_state(ConfigStates.waiting_link_gate)
+        gate_lines = "\n".join(f"• {g['title']} `{g['chat_id']}`" for g in gates)
+        await message.answer(f"Chọn gate:\n{gate_lines}", parse_mode="Markdown")
+
+    @router.message(ConfigStates.waiting_link_gate)
+    async def link_gate_step(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        target_id = data.get("link_target_id")
+        try:
+            gate_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("❌ Gửi chat_id gate")
+            return
+        if gate_id not in await db.get_gate_channel_ids():
+            await message.answer("❌ Gate không hợp lệ")
+            return
+        await db.set_target_gate(target_id, gate_id)
+        await state.clear()
+        t = await db.get_channel(target_id)
+        g = await db.get_channel(gate_id)
+        await message.answer(
+            f"🔗 {t.get('title')} → {g.get('title')}",
+            parse_mode="Markdown",
+        )
 
     @router.callback_query(F.data == "cfg_list")
     async def cfg_list(cb: CallbackQuery) -> None:
@@ -148,9 +266,21 @@ def setup_handlers(dp: Dispatcher, db: ClenderDB, userbot_service=None) -> None:
         if not channels:
             await cb.message.answer("Chưa có kênh nào")
             return
-        lines = ["📋 **Danh sách kênh**"]
-        for c in channels:
-            lines.append(f"• [{c['channel_type']}] {c['title']} `{c['chat_id']}`")
+        lines = ["📋 **Multi-kênh**"]
+        gates = await db.list_channels("gate")
+        targets = await db.list_channels("target")
+        lines.append(f"\n🔑 **Gate ({len(gates)}):**")
+        for g in gates:
+            linked = [t for t in targets if t.get("gate_channel_id") == g["chat_id"]]
+            lines.append(f"• {g['title']} `{g['chat_id']}` → {len(linked)} kênh đích")
+        lines.append(f"\n🎯 **Kênh đích ({len(targets)}):**")
+        for c in targets:
+            g_id = c.get("gate_channel_id")
+            g_name = "mặc định"
+            if g_id:
+                g = await db.get_channel(g_id)
+                g_name = g.get("title", g_id) if g else g_id
+            lines.append(f"• {c['title']} `{c['chat_id']}` → gate: {g_name}")
         await cb.message.answer("\n".join(lines), parse_mode="Markdown")
 
     @router.callback_query(F.data == "cfg_backup_hours")

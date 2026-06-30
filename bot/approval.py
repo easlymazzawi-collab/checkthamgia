@@ -1,4 +1,4 @@
-"""Bot tự duyệt join request khi member vào kênh chỉ định."""
+"""Bot tự duyệt join request — hỗ trợ đa kênh, mỗi kênh đích có gate riêng."""
 
 from __future__ import annotations
 
@@ -38,13 +38,15 @@ async def _approve_user(
     try:
         await bot.approve_chat_join_request(chat_id=target_channel_id, user_id=user_id)
         await db.remove_pending_request(user_id, target_channel_id)
+        ch = await db.get_channel(target_channel_id)
+        title = (ch or {}).get("title", "")
         await db.upsert_user(
             user_id,
             username=username or None,
             approved_at=_now(),
             target_channel_id=target_channel_id,
         )
-        await db.log_event(user_id, "approved", username, target_channel_id, "")
+        await db.log_event(user_id, "approved", username, target_channel_id, title)
         logger.info("Bot approved user %s for channel %s", user_id, target_channel_id)
         return True
     except Exception as e:
@@ -60,32 +62,41 @@ async def _notify_admins(bot: Bot, text: str) -> None:
             logger.warning("Notify admin %s: %s", admin_id, e)
 
 
-async def _handle_gate_join(bot: Bot, db: ClenderDB, user_id: int, username: str, first_name: str = "") -> None:
+async def _handle_gate_join(
+    bot: Bot, db: ClenderDB, gate_id: int, user_id: int, username: str, first_name: str = ""
+) -> None:
+    gate = await db.get_channel(gate_id)
+    gate_title = (gate or {}).get("title", str(gate_id))
+
     await db.upsert_user(
         user_id,
         username=username,
         first_name=first_name or None,
         joined_gate_at=_now(),
     )
-    gate_id = await db.get_gate_channel_id()
-    await db.log_event(user_id, "gate_join", username, gate_id, "gate")
+    await db.log_event(user_id, "gate_join", username, gate_id, gate_title)
 
+    target_ids = await db.get_targets_for_gate(gate_id)
     pending = await db.get_pending_for_user(user_id)
     approved_any = False
+
     for req in pending:
-        if await _approve_user(bot, db, user_id, req["target_channel_id"], username):
-            approved_any = True
+        tid = req["target_channel_id"]
+        if tid in target_ids:
+            if await _approve_user(bot, db, user_id, tid, username):
+                approved_any = True
 
     if not pending:
-        for tid in await db.get_target_channel_ids():
+        for tid in target_ids:
             if await _approve_user(bot, db, user_id, tid, username):
                 approved_any = True
 
     name = username or first_name or str(user_id)
     await _notify_admins(
         bot,
-        f"✅ Vào kênh chỉ định\n"
+        f"✅ Vào gate `{gate_title}`\n"
         f"👤 {name} (`{user_id}`)\n"
+        f"🎯 Kênh đích liên quan: {len(target_ids)}\n"
         f"{'🔓 Bot đã tự duyệt' if approved_any else '⏳ Chưa có join request'}",
     )
 
@@ -108,40 +119,42 @@ def setup_approval_handlers(dp_router: Router, db: ClenderDB) -> None:
             last_name=user.last_name,
         )
 
-        gate_id = await db.get_gate_channel_id()
+        gate_id = await db.get_gate_for_target(event.chat.id)
         if gate_id and await _user_in_gate(bot, gate_id, user.id):
             await _approve_user(bot, db, user.id, event.chat.id, user.username or "")
 
     @router.chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
     async def on_gate_join(event: ChatMemberUpdated, bot: Bot) -> None:
-        gate_id = await db.get_gate_channel_id()
-        if not gate_id or event.chat.id != gate_id:
+        gate_ids = await db.get_gate_channel_ids()
+        if not gate_ids or event.chat.id not in gate_ids:
             return
         user = event.new_chat_member.user
         if user.is_bot:
             return
         await _handle_gate_join(
-            bot, db, user.id, user.username or "", user.first_name or ""
+            bot, db, event.chat.id, user.id, user.username or "", user.first_name or ""
         )
 
     dp_router.include_router(router)
 
 
 async def scan_and_approve(bot: Bot, db: ClenderDB) -> str:
-    """Quét pending requests — duyệt nếu user đã ở kênh gate."""
-    gate_id = await db.get_gate_channel_id()
-    if not gate_id:
-        return "❌ Chưa set kênh chỉ định"
-
+    """Quét pending — duyệt nếu user đã ở đúng gate của từng kênh đích."""
     rows = await db.list_all_pending()
+    if not rows:
+        return "🔍 Không có pending request"
+
     approved = 0
     for row in rows:
         uid = row["user_id"]
         tid = row["target_channel_id"]
+        gate_id = await db.get_gate_for_target(tid)
+        if not gate_id:
+            continue
         if await _user_in_gate(bot, gate_id, uid):
             user = await db.get_user(uid)
             username = (user or {}).get("username", "")
             if await _approve_user(bot, db, uid, tid, username):
                 approved += 1
 
-    return f"🔍 Bot đã duyệt {approved} yêu cầu"
+    return f"🔍 Bot đã duyệt {approved}/{len(rows)} yêu cầu (multi-kênh)"

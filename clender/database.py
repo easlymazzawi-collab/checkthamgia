@@ -31,6 +31,7 @@ class ClenderDB:
                     chat_id INTEGER UNIQUE NOT NULL,
                     title TEXT,
                     channel_type TEXT NOT NULL DEFAULT 'target',
+                    gate_channel_id INTEGER,
                     folder_name TEXT,
                     created_at TEXT NOT NULL
                 );
@@ -66,6 +67,70 @@ class ClenderDB:
                 """
             )
             await db.commit()
+            await self._migrate(db)
+
+    async def _migrate(self, db: aiosqlite.Connection) -> None:
+        try:
+            await db.execute(
+                "ALTER TABLE channels ADD COLUMN gate_channel_id INTEGER"
+            )
+            await db.commit()
+        except Exception:
+            pass
+
+    async def get_gate_channel_ids(self) -> list[int]:
+        gates = await self.list_channels("gate")
+        ids = [g["chat_id"] for g in gates]
+        legacy = await self.get_setting("gate_channel_id")
+        if legacy:
+            lid = int(legacy)
+            if lid not in ids:
+                ids.append(lid)
+        return ids
+
+    async def get_gate_for_target(self, target_channel_id: int) -> int | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT gate_channel_id FROM channels WHERE chat_id = ? AND channel_type = 'target'",
+                (target_channel_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                if row and row[0]:
+                    return int(row[0])
+        gates = await self.get_gate_channel_ids()
+        return gates[0] if gates else None
+
+    async def get_targets_for_gate(self, gate_id: int) -> list[int]:
+        """Kênh đích gắn với gate này (hoặc chưa gán gate → dùng gate mặc định đầu tiên)."""
+        targets = await self.list_channels("target")
+        gates = await self.get_gate_channel_ids()
+        default_gate = gates[0] if gates else None
+        result: list[int] = []
+        for t in targets:
+            g = t.get("gate_channel_id")
+            if g:
+                if int(g) == gate_id:
+                    result.append(t["chat_id"])
+            elif default_gate == gate_id:
+                result.append(t["chat_id"])
+        return result
+
+    async def set_target_gate(self, target_channel_id: int, gate_channel_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE channels SET gate_channel_id = ? WHERE chat_id = ? AND channel_type = 'target'",
+                (gate_channel_id, target_channel_id),
+            )
+            await db.commit()
+
+    async def get_channel(self, chat_id: int) -> dict | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM channels WHERE chat_id = ?", (chat_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
 
     async def get_setting(self, key: str, default: str = "") -> str:
         async with aiosqlite.connect(self.db_path) as db:
@@ -104,18 +169,20 @@ class ClenderDB:
         title: str,
         channel_type: str = "target",
         folder_name: str = "",
+        gate_channel_id: int | None = None,
     ) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO channels (chat_id, title, channel_type, folder_name, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO channels (chat_id, title, channel_type, gate_channel_id, folder_name, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     title = excluded.title,
                     channel_type = excluded.channel_type,
+                    gate_channel_id = COALESCE(excluded.gate_channel_id, channels.gate_channel_id),
                     folder_name = excluded.folder_name
                 """,
-                (chat_id, title, channel_type, folder_name, _now()),
+                (chat_id, title, channel_type, gate_channel_id, folder_name, _now()),
             )
             await db.commit()
 
@@ -307,13 +374,26 @@ class ClenderDB:
                 "approve_events": approve_events,
             }
 
-    async def recent_events(self, limit: int = 20) -> list[dict]:
+    async def stats_by_channel(self) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
-                SELECT * FROM join_events ORDER BY id DESC LIMIT ?
-                """,
+                SELECT channel_id, channel_title, event_type, COUNT(*) as cnt
+                FROM join_events
+                WHERE channel_id IS NOT NULL
+                GROUP BY channel_id, event_type
+                ORDER BY channel_id, event_type
+                """
+            ) as cur:
+                rows = await cur.fetchall()
+                return [dict(r) for r in rows]
+
+    async def recent_events(self, limit: int = 20) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM join_events ORDER BY id DESC LIMIT ?",
                 (limit,),
             ) as cur:
                 rows = await cur.fetchall()
